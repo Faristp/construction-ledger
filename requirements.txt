@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+python-multipart
+sqlalchemy>=2.0
+psycopg2-binary

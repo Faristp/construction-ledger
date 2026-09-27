@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Construction Ledger</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #fff; --text: #1d2330; --muted: #6b7280; --line: #e5e7eb;
+    --accent: #3b5bb5; --accent-text: #fff; --danger: #c0392b; --row: #eef1fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --card: #1d2128; --text: #e7e9ee; --muted: #9aa3b2; --line: #2c323c;
+            --accent: #6f8be0; --accent-text: #10131a; --danger: #ef6f60; --row: #232a38; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding: 16px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+           justify-content: space-between; max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0; }
+  main { max-width: 1000px; margin: 0 auto; padding: 0 16px 48px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+  .tab { border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 8px 14px;
+         border-radius: 999px; cursor: pointer; font: inherit; }
+  .tab.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button, .btn { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line);
+                 background: var(--card); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button.danger { color: var(--danger); }
+  button.small { padding: 4px 8px; font-size: 13px; }
+  input, select { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--line);
+                  background: var(--card); color: var(--text); min-width: 0; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .stat .label { color: var(--muted); font-size: 13px; }
+  .stat .value { font-size: 22px; font-weight: 600; }
+  .stat .sub { color: var(--muted); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; font-size: 13px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:nth-child(odd) { background: var(--row); }
+  tfoot td { font-weight: 600; border-top: 2px solid var(--line); border-bottom: 0; }
+  .form { display: grid; gap: 8px; grid-template-columns: 130px 1fr 150px auto; align-items: center; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .toolbar .grow { flex: 1; }
+  .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 6px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .err { color: var(--danger); margin: 6px 0 0; min-height: 1em; }
+  .tablewrap { overflow-x: auto; }
+  dialog { background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 20px; max-width: 420px; width: calc(100% - 32px); }
+  dialog::backdrop { background: rgba(0,0,0,.4); }
+  dialog label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 13px; }
+  dialog input { width: 100%; }
+  @media (max-width: 640px) { .form { grid-template-columns: 1fr 1fr; } .form input[name=purpose] { grid-column: 1 / -1; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Construction Ledger</h1>
+  <div class="toolbar" style="margin:0">
+    <button id="btnImport" hidden>Import CSV</button>
+    <a class="btn" id="btnExport" href="/api/export.csv" download>Export CSV</a>
+    <button id="btnLogin">Admin login</button>
+    <button id="btnLogout" hidden>Log out</button>
+  </div>
+</header>
+<main>
+  <div id="viewBanner" class="card" style="display:none; padding:10px 16px; color:var(--muted)">
+    View-only. <a href="#" id="viewBannerLogin">Log in</a> to add or edit payments.
+  </div>
+  <div class="tabs" id="tabs"></div>
+  <div id="view"></div>
+</main>
+
+<dialog id="dlgSh">
+  <form method="dialog" id="fSh">
+    <h3 id="shTitle" style="margin-top:0">Add shareholder</h3>
+    <label>Name</label><input id="shName" required>
+    <label>Notes (optional)</label><input id="shNotes">
+    <p class="err" id="shErr"></p>
+    <div style="display:flex; gap:8px; justify-content:flex-end">
+      <button type="button" id="shCancel">Cancel</button>
+      <button class="primary" type="submit">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgLogin">
+  <form id="fLogin">
+    <h3 style="margin-top:0">Admin login</h3>
+    <p style="color:var(--muted); margin-top:0">Enter the admin password to add, edit, delete or import payments. It was printed in the terminal when the server started, and saved in admin_password.txt in the project folder.</p>
+    <label>Password</label><input type="password" id="loginPw" required>
+    <p class="err" id="loginErr"></p>
+    <div style="display:flex; gap:8px; justify-content:flex-end">
+      <button type="button" id="loginCancel">Cancel</button>
+      <button class="primary" type="submit">Log in</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgImp">
+  <form id="fImp">
+    <h3 style="margin-top:0">Import CSV</h3>
+    <p style="color:var(--muted); margin-top:0">Columns: <b>date, purpose, amount</b> and optionally <b>shareholder</b> (your sheet's "Column1" also works). Export each Google Sheet tab via File &rarr; Download &rarr; CSV.</p>
+    <label>CSV file</label><input type="file" id="impFile" accept=".csv" required>
+    <label>Year for dates without a year (e.g. 19-Feb)</label><input type="number" id="impYear" required>
+    <label>Shareholder name (only if the file has no shareholder column)</label><input id="impName">
+    <p class="err" id="impMsg"></p>
+    <div style="display:flex; gap:8px; justify-content:flex-end">
+      <button type="button" id="impCancel">Close</button>
+      <button class="primary" type="submit">Import</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const inr = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 2 });
+const fmtDate = iso => new Date(iso + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+let state = { data: null, current: "all", entries: [], q: "", editingSh: null, isAdmin: false };
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts.body && !(opts.body instanceof FormData)
+    ? { ...opts, headers: { "Content-Type": "application/json" }, body: JSON.stringify(opts.body) } : opts);
+  if (!res.ok) {
+    let msg = res.statusText;
+    try { const j = await res.json(); msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch {}
+    if (res.status === 401) { state.isAdmin = false; renderAuthUI(); msg = "Please log in as admin to make changes."; }
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
+async function load() {
+  const [data, session] = await Promise.all([api("/api/shareholders"), api("/api/session")]);
+  state.data = data;
+  state.isAdmin = session.admin;
+  if (state.current !== "all" && !state.data.shareholders.some(s => s.id === state.current)) state.current = "all";
+  const qs = new URLSearchParams();
+  if (state.current !== "all") qs.set("shareholder_id", state.current);
+  if (state.q) qs.set("q", state.q);
+  state.entries = await api("/api/entries?" + qs);
+  renderAuthUI();
+  render();
+}
+
+function renderAuthUI() {
+  document.getElementById("btnImport").hidden = !state.isAdmin;
+  document.getElementById("btnLogin").hidden = state.isAdmin;
+  document.getElementById("btnLogout").hidden = !state.isAdmin;
+  document.getElementById("viewBanner").style.display = state.isAdmin ? "none" : "block";
+}
+
+function renderTabs() {
+  const t = document.getElementById("tabs");
+  const chips = [`<button class="tab ${state.current === "all" ? "active" : ""}" data-id="all">Summary</button>`]
+    .concat(state.data.shareholders.map(s =>
+      `<button class="tab ${state.current === s.id ? "active" : ""}" data-id="${s.id}">${esc(s.name)}</button>`));
+  if (state.isAdmin) chips.push(`<button class="tab" id="addSh">+ Shareholder</button>`);
+  t.innerHTML = chips.join("");
+  t.querySelectorAll("[data-id]").forEach(b => b.onclick = () => {
+    state.current = b.dataset.id === "all" ? "all" : Number(b.dataset.id); state.q = ""; load();
+  });
+  if (state.isAdmin) document.getElementById("addSh").onclick = () => openShDialog(null);
+  document.getElementById("btnExport").href = "/api/export.csv" + (state.current !== "all" ? "?shareholder_id=" + state.current : "");
+}
+
+function renderSummary(view) {
+  const d = state.data;
+  if (!d.shareholders.length) {
+    view.innerHTML = `<div class="card">No shareholders yet. Add one with <b>+ Shareholder</b>, or import a CSV.</div>`;
+    return;
+  }
+  view.innerHTML = `
+    <div class="grid" style="margin-bottom:16px">
+      <div class="card stat" style="margin:0"><div class="label">Total invested</div><div class="value">${inr.format(d.grand_total)}</div>
+        <div class="sub">${d.shareholders.length} shareholders</div></div>
+      ${d.shareholders.map(s => `
+        <div class="card stat" style="margin:0"><div class="label">${esc(s.name)}</div>
+          <div class="value">${inr.format(s.total)}</div>
+          <div class="sub">${s.percent}% &middot; ${s.entries} payments</div>
+          <div class="bar"><i style="width:${s.percent}%"></i></div></div>`).join("")}
+    </div>
+    <div class="card"><div class="toolbar"><b class="grow">All payments</b>
+      <input id="q" placeholder="Search purpose..." value="${esc(state.q)}"></div>
+      ${entriesTable(true)}</div>`;
+  bindSearch(); bindRowActions();
+}
+
+function renderShareholder(view) {
+  const s = state.data.shareholders.find(x => x.id === state.current);
+  view.innerHTML = `
+    <div class="card">
+      <div class="toolbar"><b class="grow" style="font-size:18px">${esc(s.name)}</b>
+        <span>${inr.format(s.total)} &middot; ${s.percent}% of total</span>
+        ${state.isAdmin ? `<button id="editSh">Rename</button><button class="danger" id="delSh">Delete</button>` : ""}</div>
+      ${state.isAdmin ? `<form class="form" id="fEntry">
+        <input type="date" name="entry_date" required>
+        <input name="purpose" placeholder="Purpose (e.g. steel foundation)" required>
+        <input type="number" name="amount" step="0.01" min="0" placeholder="Amount (INR)" required>
+        <button class="primary" type="submit">Add</button>
+      </form>
+      <p class="err" id="entErr"></p>` : ""}
+    </div>
+    <div class="card"><div class="toolbar"><b class="grow">Payments</b>
+      <input id="q" placeholder="Search purpose..." value="${esc(state.q)}"></div>
+      ${entriesTable(false)}</div>`;
+  if (state.isAdmin) {
+    const f = document.getElementById("fEntry");
+    f.entry_date.value = new Date().toISOString().slice(0, 10);
+    f.onsubmit = async e => {
+      e.preventDefault();
+      try {
+        await api("/api/entries", { method: "POST", body: {
+          shareholder_id: s.id, entry_date: f.entry_date.value, purpose: f.purpose.value, amount: Number(f.amount.value) } });
+        await load();
+      } catch (err) { document.getElementById("entErr").textContent = err.message; }
+    };
+    document.getElementById("editSh").onclick = () => openShDialog(s);
+    document.getElementById("delSh").onclick = async () => {
+      if (confirm(`Delete ${s.name} and all ${s.entries} of their payments? This cannot be undone.`)) {
+        await api("/api/shareholders/" + s.id, { method: "DELETE" }); state.current = "all"; load();
+      }
+    };
+  }
+  bindSearch(); bindRowActions();
+}
+
+function entriesTable(showName) {
+  if (!state.entries.length) return `<p style="color:var(--muted)">No payments found.</p>`;
+  const names = Object.fromEntries(state.data.shareholders.map(s => [s.id, s.name]));
+  const total = state.entries.reduce((a, e) => a + e.amount, 0);
+  const admin = state.isAdmin;
+  return `<div class="tablewrap"><table><thead><tr><th>Date</th>${showName ? "<th>Shareholder</th>" : ""}<th>Purpose</th>
+    <th class="num">Amount</th>${admin ? "<th></th>" : ""}</tr></thead><tbody>
+    ${state.entries.map(e => `<tr data-id="${e.id}"><td>${fmtDate(e.entry_date)}</td>
+      ${showName ? `<td>${esc(names[e.shareholder_id] || "")}</td>` : ""}
+      <td>${esc(e.purpose)}</td><td class="num">${inr.format(e.amount)}</td>
+      ${admin ? `<td style="white-space:nowrap"><button class="small" data-act="edit">Edit</button>
+      <button class="small danger" data-act="del">Delete</button></td>` : ""}</tr>`).join("")}
+    </tbody><tfoot><tr><td colspan="${showName ? 3 : 2}">Total${state.q ? " (filtered)" : ""}</td>
+    <td class="num">${inr.format(total)}</td>${admin ? "<td></td>" : ""}</tr></tfoot></table></div>`;
+}
+
+function bindSearch() {
+  const q = document.getElementById("q"); let timer;
+  q.oninput = () => { clearTimeout(timer); timer = setTimeout(async () => { state.q = q.value; await load();
+    const el = document.getElementById("q"); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }, 250); };
+}
+
+function bindRowActions() {
+  if (!state.isAdmin) return;
+  document.querySelectorAll("tr[data-id]").forEach(tr => {
+    const id = Number(tr.dataset.id); const e = state.entries.find(x => x.id === id);
+    tr.querySelector('[data-act="del"]').onclick = async () => {
+      if (confirm(`Delete "${e.purpose}" (${inr.format(e.amount)})?`)) { await api("/api/entries/" + id, { method: "DELETE" }); load(); }
+    };
+    tr.querySelector('[data-act="edit"]').onclick = () => editRow(tr, e);
+  });
+}
+
+function editRow(tr, e) {
+  const opts = state.data.shareholders.map(s => `<option value="${s.id}" ${s.id === e.shareholder_id ? "selected" : ""}>${esc(s.name)}</option>`).join("");
+  const showName = state.current === "all";
+  tr.innerHTML = `<td><input type="date" value="${e.entry_date}" id="ed"></td>
+    ${showName ? `<td><select id="es">${opts}</select></td>` : ""}
+    <td><input id="ep" value="${esc(e.purpose)}" style="width:100%"></td>
+    <td class="num"><input id="ea" type="number" step="0.01" min="0" value="${e.amount}" style="width:120px"></td>
+    <td style="white-space:nowrap"><button class="small primary" id="sv">Save</button> <button class="small" id="cx">Cancel</button></td>`;
+  tr.querySelector("#cx").onclick = () => render();
+  tr.querySelector("#sv").onclick = async () => {
+    try {
+      await api("/api/entries/" + e.id, { method: "PUT", body: {
+        shareholder_id: showName ? Number(tr.querySelector("#es").value) : e.shareholder_id,
+        entry_date: tr.querySelector("#ed").value, purpose: tr.querySelector("#ep").value,
+        amount: Number(tr.querySelector("#ea").value) } });
+      load();
+    } catch (err) { alert(err.message); }
+  };
+}
+
+function render() {
+  renderTabs();
+  const v = document.getElementById("view");
+  state.current === "all" ? renderSummary(v) : renderShareholder(v);
+}
+
+/* shareholder dialog */
+const dlgSh = document.getElementById("dlgSh");
+function openShDialog(s) {
+  state.editingSh = s;
+  document.getElementById("shTitle").textContent = s ? "Rename shareholder" : "Add shareholder";
+  document.getElementById("shName").value = s ? s.name : "";
+  document.getElementById("shNotes").value = s ? s.notes : "";
+  document.getElementById("shErr").textContent = "";
+  dlgSh.showModal();
+}
+document.getElementById("shCancel").onclick = () => dlgSh.close();
+document.getElementById("fSh").onsubmit = async e => {
+  e.preventDefault();
+  const body = { name: document.getElementById("shName").value, notes: document.getElementById("shNotes").value };
+  try {
+    if (state.editingSh) await api("/api/shareholders/" + state.editingSh.id, { method: "PUT", body });
+    else { const r = await api("/api/shareholders", { method: "POST", body }); state.current = r.id; }
+    dlgSh.close(); load();
+  } catch (err) { document.getElementById("shErr").textContent = err.message; }
+};
+
+/* import dialog */
+const dlgImp = document.getElementById("dlgImp");
+document.getElementById("btnImport").onclick = () => {
+  document.getElementById("impYear").value = new Date().getFullYear();
+  const cur = state.data.shareholders.find(s => s.id === state.current);
+  document.getElementById("impName").value = cur ? cur.name : "";
+  document.getElementById("impMsg").textContent = ""; dlgImp.showModal();
+};
+document.getElementById("impCancel").onclick = () => dlgImp.close();
+document.getElementById("fImp").onsubmit = async e => {
+  e.preventDefault();
+  const fd = new FormData();
+  fd.append("file", document.getElementById("impFile").files[0]);
+  fd.append("default_year", document.getElementById("impYear").value);
+  fd.append("shareholder_name", document.getElementById("impName").value);
+  const msg = document.getElementById("impMsg");
+  try {
+    const r = await api("/api/import", { method: "POST", body: fd });
+    msg.style.color = r.errors.length ? "var(--danger)" : "var(--accent)";
+    msg.textContent = `Imported ${r.added} rows.` + (r.errors.length ? " Problems: " + r.errors.slice(0, 5).join("; ") : "");
+    load();
+  } catch (err) { msg.style.color = "var(--danger)"; msg.textContent = err.message; }
+};
+
+/* login dialog */
+const dlgLogin = document.getElementById("dlgLogin");
+function openLogin() {
+  document.getElementById("loginPw").value = "";
+  document.getElementById("loginErr").textContent = "";
+  dlgLogin.showModal();
+  setTimeout(() => document.getElementById("loginPw").focus(), 0);
+}
+document.getElementById("btnLogin").onclick = openLogin;
+document.getElementById("viewBannerLogin").onclick = e => { e.preventDefault(); openLogin(); };
+document.getElementById("loginCancel").onclick = () => dlgLogin.close();
+document.getElementById("fLogin").onsubmit = async e => {
+  e.preventDefault();
+  try {
+    await api("/api/login", { method: "POST", body: { password: document.getElementById("loginPw").value } });
+    dlgLogin.close();
+    load();
+  } catch (err) { document.getElementById("loginErr").textContent = err.message; }
+};
+document.getElementById("btnLogout").onclick = async () => { await api("/api/logout", { method: "POST" }); load(); };
+
+load();
+</script>
+</body>
+</html>
