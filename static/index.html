@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Construction Ledger</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 <style>
   :root {
     --bg: #f5f6f8; --card: #fff; --text: #1d2330; --muted: #6b7280; --line: #e5e7eb;
@@ -53,6 +56,26 @@
   dialog::backdrop { background: rgba(0,0,0,.4); }
   dialog label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 13px; }
   dialog input { width: 100%; }
+  .chartContainer { position: relative; height: 300px; margin-bottom: 16px; }
+  
+  /* Flatpickr customization */
+  .flatpickr-calendar { background: var(--card); border: 1px solid var(--line); }
+  .flatpickr-calendar.open { box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+  .flatpickr-months { background: var(--card); }
+  .flatpickr-month { color: var(--text); font-weight: 600; }
+  .flatpickr-monthDropdown-months, .flatpickr-monthDropdown-year { color: var(--text) !important; background: var(--row) !important; border: 1px solid var(--line) !important; font-weight: 600 !important; }
+  .flatpickr-monthDropdown-months option, .flatpickr-monthDropdown-year option { background: var(--card); color: var(--text); font-weight: 600; }
+  .flatpickr-yearDropdown { color: var(--accent) !important; background: var(--row) !important; border: 1px solid var(--line) !important; font-weight: 600 !important; }
+  .flatpickr-year { color: var(--accent) !important; font-weight: 600 !important; }
+  .flatpickr-prev-month, .flatpickr-next-month { color: var(--accent); fill: var(--accent); }
+  .flatpickr-weekday { color: var(--muted); background: var(--row); font-weight: 600; }
+  .flatpickr-day { color: var(--text); }
+  .flatpickr-day.selected, .flatpickr-day.startRange, .flatpickr-day.endRange { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  .flatpickr-day.inRange { background: var(--row); }
+  .flatpickr-day:hover, .flatpickr-day.prevMonthDay:hover, .flatpickr-day.nextMonthDay:hover, .flatpickr-day.disabled:hover { background: var(--row); }
+  .flatpickr-time_picker { background: var(--card); }
+  .flatpickr-time input { background: var(--row); color: var(--text); border: 1px solid var(--line); }
+  
   @media (max-width: 640px) { .form { grid-template-columns: 1fr 1fr; } .form input[name=purpose] { grid-column: 1 / -1; } }
 </style>
 </head>
@@ -236,6 +259,10 @@ function renderSummary(view) {
   }
   
   view.innerHTML = summaryHtml + `
+    <div class="card">
+      <div style="margin-bottom:16px"><b>Cumulative Spending by Shareholder</b></div>
+      <div class="chartContainer"><canvas id="spendingChart"></canvas></div>
+    </div>
     <div class="card"><div class="toolbar"><b class="grow">All payments</b>
       <div class="toolbar" style="margin:0; gap:8px; flex-wrap:wrap">
         <input id="startDate" type="date" value="${esc(state.startDate)}" aria-label="Start date">
@@ -248,6 +275,12 @@ function renderSummary(view) {
   bindSearch();
   bindDateFilters();
   bindRowActions();
+  
+  // Render chart after DOM is updated
+  setTimeout(() => renderSpendingChart(state.entries, state.data.shareholders), 0);
+  
+  // Initialize date pickers
+  setTimeout(() => initDatePickers(), 0);
 }
 
 function renderShareholder(view) {
@@ -312,6 +345,80 @@ function entriesTable(showName) {
       <button class="small danger" data-act="del">Delete</button></td>` : ""}</tr>`).join("")}
     </tbody><tfoot><tr><td colspan="${showName ? 3 : 2}">Total${isFiltered ? " (filtered)" : ""}</td>
     <td class="num">${inr.format(total)}</td>${admin ? "<td></td>" : ""}</tr></tfoot></table></div>`;
+}
+
+function renderSpendingChart(entries, shareholders) {
+  const canvas = document.getElementById("spendingChart");
+  if (!canvas) return;
+
+  // Aggregate cumulative spending by shareholder and date
+  const byDate = {};
+  const sorted = [...entries].sort((a, b) => new Date(a.entry_date) - new Date(b.entry_date));
+  
+  for (const entry of sorted) {
+    if (!byDate[entry.entry_date]) byDate[entry.entry_date] = {};
+    if (!byDate[entry.entry_date][entry.shareholder_id]) {
+      byDate[entry.entry_date][entry.shareholder_id] = 0;
+    }
+    byDate[entry.entry_date][entry.shareholder_id] += entry.amount;
+  }
+
+  // Build cumulative data for each shareholder
+  const dates = Object.keys(byDate).sort();
+  const colors = [
+    '#3b5bb5', '#ef6f60', '#52c41a', '#faad14', '#f5222d', '#722ed1',
+    '#13c2c2', '#eb2f96', '#fa8c16', '#52b788', '#ff6b6b', '#4ecdc4'
+  ];
+  
+  const datasets = shareholders
+    .filter(sh => entries.some(e => e.shareholder_id === sh.id))
+    .map((sh, idx) => {
+      const cumulative = [];
+      let sum = 0;
+      for (const date of dates) {
+        sum += byDate[date][sh.id] || 0;
+        cumulative.push(sum);
+      }
+      return {
+        label: sh.name,
+        data: cumulative,
+        borderColor: colors[idx % colors.length],
+        backgroundColor: colors[idx % colors.length] + '15',
+        borderWidth: 1,
+        tension: 0,
+        fill: false,
+        pointRadius: 1,
+        pointHoverRadius: 2
+      };
+    });
+
+  if (window.spendingChartInstance) {
+    window.spendingChartInstance.destroy();
+  }
+
+  window.spendingChartInstance = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: dates.map(() => ""),
+      datasets: datasets
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, position: 'top' },
+        filler: { propagate: true }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          ticks: {
+            callback: val => '₹' + Math.round(val / 100)
+          }
+        }
+      }
+    }
+  });
 }
 
 function bindDateFilters() {
@@ -449,6 +556,26 @@ document.getElementById("fLogin").onsubmit = async e => {
   } catch (err) { document.getElementById("loginErr").textContent = err.message; }
 };
 document.getElementById("btnLogout").onclick = async () => { await api("/api/logout", { method: "POST" }); load(); };
+
+/* Initialize Flatpickr for date inputs */
+function initDatePickers() {
+  const startInputs = document.querySelectorAll('input#startDate');
+  const endInputs = document.querySelectorAll('input#endDate');
+  
+  startInputs.forEach(input => {
+    flatpickr(input, {
+      dateFormat: "Y-m-d",
+      theme: "light"
+    });
+  });
+  
+  endInputs.forEach(input => {
+    flatpickr(input, {
+      dateFormat: "Y-m-d",
+      theme: "light"
+    });
+  });
+}
 
 load();
 </script>
