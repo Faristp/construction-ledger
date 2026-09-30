@@ -120,7 +120,7 @@ const inr = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR",
 const fmtDate = iso => new Date(iso + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-let state = { data: null, current: "all", entries: [], q: "", editingSh: null, isAdmin: false };
+let state = { data: null, current: "all", entries: [], q: "", startDate: "", endDate: "", editingSh: null, isAdmin: false };
 
 async function api(path, opts = {}) {
   const res = await fetch(path, opts.body && !(opts.body instanceof FormData)
@@ -142,6 +142,8 @@ async function load() {
   const qs = new URLSearchParams();
   if (state.current !== "all") qs.set("shareholder_id", state.current);
   if (state.q) qs.set("q", state.q);
+  if (state.startDate) qs.set("start_date", state.startDate);
+  if (state.endDate) qs.set("end_date", state.endDate);
   state.entries = await api("/api/entries?" + qs);
   renderAuthUI();
   render();
@@ -165,16 +167,63 @@ function renderTabs() {
     state.current = b.dataset.id === "all" ? "all" : Number(b.dataset.id); state.q = ""; load();
   });
   if (state.isAdmin) document.getElementById("addSh").onclick = () => openShDialog(null);
-  document.getElementById("btnExport").href = "/api/export.csv" + (state.current !== "all" ? "?shareholder_id=" + state.current : "");
+  const exportUrl = new URL("/api/export.csv", location.origin);
+  if (state.current !== "all") exportUrl.searchParams.set("shareholder_id", state.current);
+  if (state.startDate) exportUrl.searchParams.set("start_date", state.startDate);
+  if (state.endDate) exportUrl.searchParams.set("end_date", state.endDate);
+  document.getElementById("btnExport").href = exportUrl.toString();
 }
 
 function renderSummary(view) {
   const d = state.data;
+  const isFiltered = !!(state.q || state.startDate || state.endDate);
+  
   if (!d.shareholders.length) {
     view.innerHTML = `<div class="card">No shareholders yet. Add one with <b>+ Shareholder</b>, or import a CSV.</div>`;
     return;
   }
-  view.innerHTML = `
+
+  // Calculate summary from filtered entries if date range is active
+  let summaryHtml = '';
+  if (isFiltered) {
+    const filtered = {};
+    let grandTotal = 0;
+    for (const e of state.entries) {
+      if (!filtered[e.shareholder_id]) {
+        filtered[e.shareholder_id] = { total: 0, count: 0 };
+      }
+      filtered[e.shareholder_id].total += e.amount;
+      filtered[e.shareholder_id].count += 1;
+      grandTotal += e.amount;
+    }
+    const summaryData = d.shareholders.map(s => ({
+      ...s,
+      total: filtered[s.id]?.total || 0,
+      entries: filtered[s.id]?.count || 0,
+      percent: grandTotal > 0 ? Math.round((filtered[s.id]?.total || 0) * 100 / grandTotal * 100) / 100 : 0
+    })).filter(s => s.total > 0);
+    
+    const dateRange = state.startDate && state.endDate 
+      ? ` (${fmtDate(state.startDate)} to ${fmtDate(state.endDate)})`
+      : state.startDate ? ` (from ${fmtDate(state.startDate)})`
+      : state.endDate ? ` (until ${fmtDate(state.endDate)})`
+      : '';
+    
+    summaryHtml = `
+    <div class="card" style="padding:12px 16px; margin-bottom:12px; color:var(--muted); background:var(--row)">
+      <b>Summary for selected period${dateRange}</b>
+    </div>
+    <div class="grid" style="margin-bottom:16px">
+      <div class="card stat" style="margin:0"><div class="label">Total invested</div><div class="value">${inr.format(grandTotal)}</div>
+        <div class="sub">${summaryData.length} shareholder${summaryData.length !== 1 ? 's' : ''}</div></div>
+      ${summaryData.map(s => `
+        <div class="card stat" style="margin:0"><div class="label">${esc(s.name)}</div>
+          <div class="value">${inr.format(s.total)}</div>
+          <div class="sub">${s.percent}% &middot; ${s.entries} payment${s.entries !== 1 ? 's' : ''}</div>
+          <div class="bar"><i style="width:${s.percent}%"></i></div></div>`).join("")}
+    </div>`;
+  } else {
+    summaryHtml = `
     <div class="grid" style="margin-bottom:16px">
       <div class="card stat" style="margin:0"><div class="label">Total invested</div><div class="value">${inr.format(d.grand_total)}</div>
         <div class="sub">${d.shareholders.length} shareholders</div></div>
@@ -183,11 +232,22 @@ function renderSummary(view) {
           <div class="value">${inr.format(s.total)}</div>
           <div class="sub">${s.percent}% &middot; ${s.entries} payments</div>
           <div class="bar"><i style="width:${s.percent}%"></i></div></div>`).join("")}
-    </div>
+    </div>`;
+  }
+  
+  view.innerHTML = summaryHtml + `
     <div class="card"><div class="toolbar"><b class="grow">All payments</b>
+      <div class="toolbar" style="margin:0; gap:8px; flex-wrap:wrap">
+        <input id="startDate" type="date" value="${esc(state.startDate)}" aria-label="Start date">
+        <input id="endDate" type="date" value="${esc(state.endDate)}" aria-label="End date">
+        <button id="applyRange" type="button">Apply</button>
+        <button id="clearRange" type="button">Clear</button>
+      </div>
       <input id="q" placeholder="Search purpose..." value="${esc(state.q)}"></div>
       ${entriesTable(true)}</div>`;
-  bindSearch(); bindRowActions();
+  bindSearch();
+  bindDateFilters();
+  bindRowActions();
 }
 
 function renderShareholder(view) {
@@ -206,6 +266,12 @@ function renderShareholder(view) {
       <p class="err" id="entErr"></p>` : ""}
     </div>
     <div class="card"><div class="toolbar"><b class="grow">Payments</b>
+      <div class="toolbar" style="margin:0; gap:8px; flex-wrap:wrap">
+        <input id="startDate" type="date" value="${esc(state.startDate)}" aria-label="Start date">
+        <input id="endDate" type="date" value="${esc(state.endDate)}" aria-label="End date">
+        <button id="applyRange" type="button">Apply</button>
+        <button id="clearRange" type="button">Clear</button>
+      </div>
       <input id="q" placeholder="Search purpose..." value="${esc(state.q)}"></div>
       ${entriesTable(false)}</div>`;
   if (state.isAdmin) {
@@ -226,7 +292,9 @@ function renderShareholder(view) {
       }
     };
   }
-  bindSearch(); bindRowActions();
+  bindSearch();
+  bindDateFilters();
+  bindRowActions();
 }
 
 function entriesTable(showName) {
@@ -234,6 +302,7 @@ function entriesTable(showName) {
   const names = Object.fromEntries(state.data.shareholders.map(s => [s.id, s.name]));
   const total = state.entries.reduce((a, e) => a + e.amount, 0);
   const admin = state.isAdmin;
+  const isFiltered = !!(state.q || state.startDate || state.endDate);
   return `<div class="tablewrap"><table><thead><tr><th>Date</th>${showName ? "<th>Shareholder</th>" : ""}<th>Purpose</th>
     <th class="num">Amount</th>${admin ? "<th></th>" : ""}</tr></thead><tbody>
     ${state.entries.map(e => `<tr data-id="${e.id}"><td>${fmtDate(e.entry_date)}</td>
@@ -241,8 +310,35 @@ function entriesTable(showName) {
       <td>${esc(e.purpose)}</td><td class="num">${inr.format(e.amount)}</td>
       ${admin ? `<td style="white-space:nowrap"><button class="small" data-act="edit">Edit</button>
       <button class="small danger" data-act="del">Delete</button></td>` : ""}</tr>`).join("")}
-    </tbody><tfoot><tr><td colspan="${showName ? 3 : 2}">Total${state.q ? " (filtered)" : ""}</td>
+    </tbody><tfoot><tr><td colspan="${showName ? 3 : 2}">Total${isFiltered ? " (filtered)" : ""}</td>
     <td class="num">${inr.format(total)}</td>${admin ? "<td></td>" : ""}</tr></tfoot></table></div>`;
+}
+
+function bindDateFilters() {
+  const apply = document.getElementById("applyRange");
+  const clear = document.getElementById("clearRange");
+  const start = document.getElementById("startDate");
+  const end = document.getElementById("endDate");
+
+  if (!apply || !clear || !start || !end) return;
+
+  apply.onclick = () => {
+    state.startDate = start.value;
+    state.endDate = end.value;
+    if (state.startDate && state.endDate && state.startDate > state.endDate) {
+      alert("Start date cannot be later than end date.");
+      return;
+    }
+    load();
+  };
+
+  clear.onclick = () => {
+    state.startDate = "";
+    state.endDate = "";
+    start.value = "";
+    end.value = "";
+    load();
+  };
 }
 
 function bindSearch() {

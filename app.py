@@ -171,7 +171,15 @@ def delete_shareholder(sid: int):
 
 # ---------- entries ----------
 @app.get("/api/entries")
-def list_entries(shareholder_id: int | None = None, q: str = ""):
+def list_entries(
+    shareholder_id: int | None = None,
+    q: str = "",
+    start_date: date | None = None,
+    end_date: date | None = None,
+):
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(400, "start_date cannot be later than end_date")
+
     sql = "SELECT * FROM entries WHERE 1=1"
     params: dict = {}
     if shareholder_id:
@@ -180,6 +188,12 @@ def list_entries(shareholder_id: int | None = None, q: str = ""):
     if q:
         sql += " AND purpose ILIKE :q"
         params["q"] = f"%{q}%"
+    if start_date:
+        sql += " AND entry_date >= :start_date"
+        params["start_date"] = start_date
+    if end_date:
+        sql += " AND entry_date <= :end_date"
+        params["end_date"] = end_date
     sql += " ORDER BY entry_date, id"
     with db() as con:
         return [entry_row(r) for r in con.execute(sql, params).fetchall()]
